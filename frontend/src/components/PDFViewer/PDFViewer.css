@@ -1,0 +1,174 @@
+.pdf-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-color);
+  position: relative;
+}
+
+/* Toolbar */
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--background-color);
+  border-bottom: 1px solid var(--surface-light);
+}
+
+.toolbar-left,
+.toolbar-center,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  border-radius: 8px;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: var(--surface-light);
+  color: var(--text-primary);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+}
+
+.toolbar-filename {
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-indicator {
+  font-size: 14px;
+  color: var(--text-secondary);
+  min-width: 100px;
+  text-align: center;
+}
+
+.zoom-level {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 48px;
+  text-align: center;
+}
+
+/* PDF Content */
+.pdf-content {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+  position: relative;
+}
+
+.pdf-page-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.pdf-page-wrapper {
+  position: relative;
+  box-shadow: var(--shadow);
+  background: white;
+}
+
+.pdf-loading,
+.pdf-error {
+  padding: 48px;
+  color: var(--text-secondary);
+  font-size: 16px;
+}
+
+.pdf-error {
+  color: #ef4444;
+}
+
+/* Analyzing overlay */
+.analyzing-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  gap: 16px;
+}
+
+.analyzing-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--surface-light);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.analyzing-overlay p {
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+/* Key indicator */
+.key-indicator {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  background: var(--background-color);
+  padding: 8px 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: var(--shadow);
+}
+
+.key-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.key-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+/* React-PDF overrides */
+.react-pdf__Page {
+  display: flex !important;
+  justify-content: center;
+}
+
+.react-pdf__Page__canvas {
+  display: block !important;
+}

@@ -1,0 +1,269 @@
+.sidebar {
+  width: 350px;
+  min-width: 350px;
+  background: var(--background-color);
+  border-left: 1px solid var(--surface-light);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  padding: 24px;
+  text-align: center;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--surface-light);
+}
+
+.sidebar-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sidebar-filename {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-section {
+  padding: 20px;
+  border-bottom: 1px solid var(--surface-light);
+}
+
+.sidebar-section:last-child {
+  border-bottom: none;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+/* Key Display */
+.key-display {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.key-tonic {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--primary-color);
+}
+
+.key-mode {
+  font-size: 18px;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.key-info {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Progression Grid */
+.progression-name {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  font-style: italic;
+}
+
+.progression-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.progression-chord {
+  padding: 8px 4px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  border-radius: 6px;
+}
+
+.progression-chord:hover {
+  background: var(--surface-light);
+  color: var(--text-primary);
+}
+
+.progression-chord.active {
+  background: var(--primary-color);
+  color: white;
+}
+
+/* Modulations */
+.modulations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modulation-item {
+  background: var(--surface-color);
+  padding: 12px;
+  border-radius: 8px;
+  border-left: 3px solid var(--accent-borrowed);
+}
+
+.modulation-header {
+  margin-bottom: 8px;
+}
+
+.modulation-measure {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.modulation-keys {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mod-from {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.mod-arrow {
+  color: var(--accent-borrowed);
+}
+
+.mod-to {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-borrowed);
+}
+
+/* Selected Measure */
+.selected-measure {
+  background: var(--surface-color);
+}
+
+.measure-details {
+  margin-bottom: 16px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+.detail-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.detail-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.measure-chords h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.chord-detail {
+  background: var(--background-color);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.chord-detail:last-child {
+  margin-bottom: 0;
+}
+
+.chord-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.chord-symbol {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.chord-function-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: white;
+  text-transform: capitalize;
+}
+
+.chord-detail-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chord-roman {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+.chord-notes {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Legend */
+.legend {
+  margin-top: auto;
+}
+
+.legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}

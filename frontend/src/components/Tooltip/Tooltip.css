@@ -1,0 +1,200 @@
+.tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 320px;
+  background: var(--background-color);
+  border: 1px solid var(--surface-light);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: tooltipFadeIn 0.15s ease;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tooltip-content {
+  padding: 16px;
+}
+
+.tooltip-content.modulation {
+  border-left: 4px solid var(--accent-borrowed);
+}
+
+.tooltip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--surface-light);
+}
+
+.tooltip-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.tooltip-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  background: var(--primary-color);
+}
+
+.tooltip-badge.secondary {
+  background: var(--secondary-color);
+}
+
+.tooltip-badge.modulation-badge {
+  background: var(--accent-borrowed);
+}
+
+.tooltip-section {
+  margin-bottom: 12px;
+}
+
+.tooltip-section:last-child {
+  margin-bottom: 0;
+}
+
+.tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.tooltip-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tooltip-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.tooltip-function {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.tooltip-explanation {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+/* Confidence bar */
+.tooltip-confidence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface-light);
+}
+
+.confidence-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--surface-light);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.confidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary-color), var(--accent-tonic));
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.confidence-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* Harmonic analysis */
+.harmonic-analysis {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.harmonic-chord {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.harmonic-roman {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.harmonic-symbol {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Modulation keys */
+.modulation-keys {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.key-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--surface-color);
+  border-radius: 8px;
+}
+
+.key-box .key-label {
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.key-box .key-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.key-box.from {
+  border: 1px solid var(--secondary-color);
+}
+
+.key-box.to {
+  border: 1px solid var(--accent-borrowed);
+}
+
+.modulation-arrow {
+  font-size: 24px;
+  color: var(--accent-borrowed);
+}
