@@ -3,6 +3,7 @@ Music analysis service.
 
 Performs chord detection, key analysis, and harmonic function classification.
 Uses music21 for music theory operations when available.
+Integrates with OMR service for real sheet music recognition.
 """
 
 import os
@@ -18,8 +19,13 @@ try:
 except ImportError:
     HAS_MUSIC21 = False
 
+# Import OMR service
+from app.services.omr_service import full_analysis, process_page_with_omr, detect_measure_positions
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+
+# Flag to enable/disable real OMR (can be toggled for testing)
+USE_REAL_OMR = True
 
 # Chord function mappings
 CHORD_FUNCTIONS = {
@@ -210,6 +216,7 @@ def _get_roman_numeral(root: str, quality: str, key_tonic: str) -> str:
 async def get_analysis_result(file_id: str) -> dict:
     """
     Get or generate analysis result for a file.
+    Uses real OMR when available, falls back to mock data.
     """
     upload_path = os.path.join(UPLOAD_DIR, file_id)
     analysis_path = os.path.join(upload_path, "analysis.json")
@@ -219,8 +226,20 @@ async def get_analysis_result(file_id: str) -> dict:
         with open(analysis_path, 'r') as f:
             return json.load(f)
 
-    # Generate mock analysis
-    result = generate_mock_analysis(file_id)
+    # Count available pages
+    num_pages = count_page_images(upload_path)
+
+    if USE_REAL_OMR and num_pages > 0:
+        # Use real OMR analysis
+        try:
+            result = await full_analysis(file_id, num_pages)
+            result = format_analysis_result(file_id, result)
+        except Exception as e:
+            print(f"OMR failed, falling back to mock: {e}")
+            result = generate_mock_analysis(file_id)
+    else:
+        # Fall back to mock analysis
+        result = generate_mock_analysis(file_id)
 
     # Cache the result
     with open(analysis_path, 'w') as f:
@@ -229,30 +248,178 @@ async def get_analysis_result(file_id: str) -> dict:
     return result
 
 
+def count_page_images(upload_path: str) -> int:
+    """Count the number of page images in the upload directory."""
+    if not os.path.exists(upload_path):
+        return 0
+    return len([f for f in os.listdir(upload_path) if f.startswith('page_') and f.endswith('.png')])
+
+
+def format_analysis_result(file_id: str, omr_result: dict) -> dict:
+    """
+    Format OMR result to match the expected frontend schema.
+    Adds IDs and bounding boxes where needed.
+    """
+    pages = []
+
+    for page_data in omr_result.get("pages", []):
+        measures = []
+
+        for i, measure in enumerate(page_data.get("measures", [])):
+            # Ensure bounding box exists
+            bbox = measure.get("boundingBox", {
+                "x": 0.05 + (i % 4) * 0.23,
+                "y": 0.15 + (i // 4) * 0.2,
+                "width": 0.2,
+                "height": 0.15
+            })
+
+            # Format chords
+            formatted_chords = []
+            for j, chord_data in enumerate(measure.get("chords", [])):
+                chord_bbox = {
+                    "x": bbox["x"] + 0.02,
+                    "y": bbox["y"] + 0.02,
+                    "width": bbox["width"] - 0.04,
+                    "height": bbox["height"] - 0.04
+                }
+
+                formatted_chords.append({
+                    "id": f"chord-{page_data.get('pageNumber', 1)}-{i}-{j}",
+                    "symbol": chord_data.get("symbol", "?"),
+                    "root": chord_data.get("root", "?"),
+                    "quality": chord_data.get("quality", ""),
+                    "notes": chord_data.get("notes", []),
+                    "boundingBox": chord_bbox,
+                    "romanNumeral": chord_data.get("romanNumeral", "?"),
+                    "function": chord_data.get("function", "unknown"),
+                    "confidence": chord_data.get("confidence", 0.8),
+                    "beatPosition": 1
+                })
+
+            # Format notes into beats
+            beats = [{
+                "number": 1,
+                "notes": [
+                    {
+                        "pitch": n.get("pitch", "C4"),
+                        "duration": n.get("duration", "quarter"),
+                        "boundingBox": {
+                            "x": bbox["x"] + 0.02,
+                            "y": bbox["y"] + 0.04,
+                            "width": 0.03,
+                            "height": 0.08
+                        }
+                    }
+                    for n in measure.get("notes", [])[:4]  # Limit notes shown
+                ],
+                "chord": formatted_chords[0] if formatted_chords else None
+            }]
+
+            measures.append({
+                "number": measure.get("number", i + 1),
+                "boundingBox": bbox,
+                "beats": beats,
+                "localKey": measure.get("localKey", omr_result.get("globalKey", {"tonic": "C", "mode": "major", "signature": 0})),
+                "chords": formatted_chords,
+                "timeSignature": measure.get("timeSignature", {"numerator": 4, "denominator": 4})
+            })
+
+        pages.append({
+            "pageNumber": page_data.get("pageNumber", 1),
+            "measures": measures
+        })
+
+    # Build chord progression from all measures
+    all_roman_numerals = []
+    for page in pages:
+        for measure in page.get("measures", []):
+            for chord_data in measure.get("chords", []):
+                all_roman_numerals.append(chord_data.get("romanNumeral", "?"))
+
+    return {
+        "id": file_id,
+        "filename": "sheet_music.pdf",
+        "pages": pages,
+        "globalKey": omr_result.get("globalKey", {"tonic": "C", "mode": "major", "signature": 0}),
+        "modulations": omr_result.get("modulations", []),
+        "chordProgression": {
+            "romanNumerals": all_roman_numerals,
+            "commonName": identify_progression(all_roman_numerals)
+        },
+        "status": "completed"
+    }
+
+
+def identify_progression(roman_numerals: list) -> str:
+    """Identify common chord progressions."""
+    if not roman_numerals:
+        return None
+
+    # Check for common patterns
+    pattern = " ".join(roman_numerals[:4]).lower()
+
+    common_patterns = {
+        "i v vi iv": "Pop progression",
+        "i iv v i": "Classical cadence",
+        "ii v i": "Jazz ii-V-I",
+        "i vi iv v": "50s progression",
+        "vi iv i v": "Axis progression",
+    }
+
+    for p, name in common_patterns.items():
+        if pattern.startswith(p):
+            return name
+
+    return None
+
+
 async def analyze_music(file_id: str) -> AsyncGenerator[dict, None]:
     """
     Analyze music with progress updates.
+    Uses real OMR when available.
 
     Yields progress updates and final result.
     """
     upload_path = os.path.join(UPLOAD_DIR, file_id)
+    num_pages = count_page_images(upload_path)
 
-    # Simulate analysis steps
-    steps = [
-        (0.1, "Loading PDF..."),
-        (0.2, "Detecting staves..."),
-        (0.4, "Recognizing notes..."),
-        (0.6, "Detecting chords..."),
-        (0.8, "Analyzing harmony..."),
-        (0.9, "Detecting key changes..."),
-    ]
+    if USE_REAL_OMR and num_pages > 0:
+        # Real OMR analysis with progress
+        yield {"type": "progress", "value": 0.1, "message": "Loading images..."}
 
-    for progress, message in steps:
-        yield {"type": "progress", "value": progress, "message": message}
-        await asyncio.sleep(0.5)  # Simulate processing time
+        yield {"type": "progress", "value": 0.2, "message": "Running OMR (this may take a minute)..."}
 
-    # Generate final result
-    result = generate_mock_analysis(file_id)
+        try:
+            # Run OMR analysis
+            omr_result = await full_analysis(file_id, num_pages)
+
+            yield {"type": "progress", "value": 0.7, "message": "Analyzing harmony..."}
+
+            result = format_analysis_result(file_id, omr_result)
+
+            yield {"type": "progress", "value": 0.9, "message": "Finalizing..."}
+
+        except Exception as e:
+            print(f"OMR failed: {e}")
+            yield {"type": "progress", "value": 0.5, "message": "OMR failed, using fallback..."}
+            result = generate_mock_analysis(file_id)
+    else:
+        # Simulated analysis for demo
+        steps = [
+            (0.1, "Loading PDF..."),
+            (0.2, "Detecting staves..."),
+            (0.4, "Recognizing notes..."),
+            (0.6, "Detecting chords..."),
+            (0.8, "Analyzing harmony..."),
+            (0.9, "Detecting key changes..."),
+        ]
+
+        for progress, message in steps:
+            yield {"type": "progress", "value": progress, "message": message}
+            await asyncio.sleep(0.3)
+
+        result = generate_mock_analysis(file_id)
 
     # Save analysis
     analysis_path = os.path.join(upload_path, "analysis.json")
