@@ -1,12 +1,14 @@
 import { useCallback, useRef, useState } from 'react';
 import { useStore } from '../../store/useStore';
+import { uploadPdf, getAnalysis } from '../../api/analysis';
 import { generateMockAnalysis } from '../../utils/mockData';
 import './UploadScreen.css';
 
 export default function UploadScreen() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const { setPdfFile, setPdfUrl, setAnalysis, setIsAnalyzing, setTotalPages } = useStore();
+  const [statusMessage, setStatusMessage] = useState<string>('');
+  const { setPdfFile, setPdfUrl, setAnalysis, setIsAnalyzing, setTotalPages, setAnalysisProgress } = useStore();
 
   const handleFile = useCallback(async (file: File) => {
     if (file.type !== 'application/pdf') {
@@ -18,16 +20,69 @@ export default function UploadScreen() {
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
     setIsAnalyzing(true);
+    setStatusMessage('Uploading PDF...');
 
-    // Simulate analysis with mock data
-    // In production, this would call the backend API
-    setTimeout(() => {
-      const mockAnalysis = generateMockAnalysis(file.name);
-      setAnalysis(mockAnalysis);
-      setTotalPages(mockAnalysis.pages.length);
-      setIsAnalyzing(false);
-    }, 1500);
-  }, [setPdfFile, setPdfUrl, setAnalysis, setIsAnalyzing, setTotalPages]);
+    try {
+      // Upload to backend
+      const { id } = await uploadPdf(file);
+      setStatusMessage('Running OMR analysis (this may take 1-2 minutes)...');
+      setAnalysisProgress(0.2);
+
+      // Poll for analysis results
+      let attempts = 0;
+      const maxAttempts = 60; // 2 minutes max
+
+      const pollAnalysis = async (): Promise<void> => {
+        try {
+          const result = await getAnalysis(id);
+
+          if (result.status === 'completed') {
+            setAnalysis(result);
+            setTotalPages(result.pages?.length || 1);
+            setIsAnalyzing(false);
+            setStatusMessage('');
+            return;
+          } else if (result.status === 'error') {
+            throw new Error(result.error || 'Analysis failed');
+          }
+
+          // Still processing, poll again
+          attempts++;
+          if (attempts < maxAttempts) {
+            setAnalysisProgress(0.2 + (attempts / maxAttempts) * 0.7);
+            setStatusMessage(`Analyzing... (${Math.round((attempts / maxAttempts) * 100)}%)`);
+            setTimeout(pollAnalysis, 2000);
+          } else {
+            throw new Error('Analysis timed out');
+          }
+        } catch (err) {
+          // If 404, analysis not ready yet
+          attempts++;
+          if (attempts < maxAttempts) {
+            setTimeout(pollAnalysis, 2000);
+          } else {
+            throw err;
+          }
+        }
+      };
+
+      // Start polling after a short delay
+      setTimeout(pollAnalysis, 3000);
+
+    } catch (error) {
+      console.error('Backend upload failed, using mock data:', error);
+      setStatusMessage('Backend unavailable, using demo mode...');
+
+      // Fallback to mock data
+      setTimeout(() => {
+        const mockAnalysis = generateMockAnalysis(file.name);
+        setAnalysis(mockAnalysis);
+        setTotalPages(mockAnalysis.pages.length);
+        setIsAnalyzing(false);
+        setStatusMessage('');
+      }, 1500);
+    }
+  }, [setPdfFile, setPdfUrl, setAnalysis, setIsAnalyzing, setTotalPages, setAnalysisProgress]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -95,6 +150,13 @@ export default function UploadScreen() {
             onChange={handleFileChange}
           />
         </div>
+
+        {statusMessage && (
+          <div className="status-message">
+            <div className="status-spinner" />
+            <span>{statusMessage}</span>
+          </div>
+        )}
 
         <div className="upload-features">
           <div className="feature">
