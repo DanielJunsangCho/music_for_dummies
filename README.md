@@ -1,252 +1,106 @@
 # Music for Dummies
 
-An educational web application that helps musicians understand music theory directly from PDF sheet music.
+Upload a PDF score and explore its harmony directly on the notation. The app links every chord to the notes that produced it, explains its Roman numeral and harmonic function, and lays the whole progression out as an interactive timeline.
 
-## High-Level Architecture
+## How score reading works
 
-```
-+------------------+     +-------------------+     +----------------------+
-|                  |     |                   |     |                      |
-|   React Frontend |<--->|  FastAPI Backend  |<--->|  Analysis Pipeline   |
-|   (TypeScript)   |     |  (Python)         |     |  (OMR + Theory)      |
-|                  |     |                   |     |                      |
-+------------------+     +-------------------+     +----------------------+
-        |                        |                          |
-        v                        v                          v
-+------------------+     +-------------------+     +----------------------+
-| - PDF Viewer     |     | - PDF Processing  |     | - Note Detection     |
-| - Interactive    |     | - API Endpoints   |     | - Chord Inference    |
-|   Overlays       |     | - WebSocket for   |     | - Key Detection      |
-| - Tooltips       |     |   real-time       |     | - Modulation Track   |
-| - Sidebar        |     |   updates         |     | - Roman Numeral      |
-+------------------+     +-------------------+     +----------------------+
-```
+The backend chooses the most accurate available path for each PDF page:
 
-## Music Analysis Pipeline
+1. **Engraved PDFs:** notation exported by MuseScore, Finale, Sibelius, Guitar Pro, LilyPond, and similar software usually contains SMuFL music-font glyphs and vector rules. The app reads those symbols and coordinates directly from the PDF. Noteheads, accidentals, clefs, key signatures, meter changes, and barlines are exact.
+2. **Scanned PDFs:** image-only pages fall back to a deterministic OpenCV pipeline that finds staves, systems, noteheads, barlines, clefs, key signatures, and accidentals from the pixels.
 
-```
-PDF Upload
-    |
-    v
-+-------------------+
-| PDF to Image      |  (pdf2image / PyMuPDF)
-| Conversion        |
-+-------------------+
-    |
-    v
-+-------------------+
-| Optical Music     |  (Audiveris / oemer / custom CNN)
-| Recognition (OMR) |
-+-------------------+
-    |
-    v
-+-------------------+
-| MusicXML/MEI      |  Structured music notation format
-| Output            |
-+-------------------+
-    |
-    v
-+-------------------+
-| Note Extraction   |  Parse notes, rests, time signatures
-| & Grouping        |
-+-------------------+
-    |
-    v
-+-------------------+
-| Chord Detection   |  Group simultaneous notes into chords
-| Algorithm         |
-+-------------------+
-    |
-    v
-+-------------------+
-| Key Detection     |  Krumhansl-Schmuckler algorithm
-| Algorithm         |
-+-------------------+
-    |
-    v
-+-------------------+
-| Harmonic Analysis |  Roman numerals, function, progressions
-+-------------------+
-    |
-    v
-+-------------------+
-| Modulation        |  Track key changes via pivot chords
-| Detection         |
-+-------------------+
-    |
-    v
-+-------------------+
-| JSON Output with  |  Bounding boxes + music theory data
-| Spatial Mapping   |
-+-------------------+
-```
+Both paths preserve page coordinates, so the frontend overlays the same rendered image that was analyzed. Chord regions and note highlights do not drift with browser size or zoom.
 
-## Tech Stack Justification
+## Harmony analysis
 
-### Frontend: React + TypeScript
-- **Why React**: Component-based architecture ideal for interactive overlays
-- **Why TypeScript**: Type safety for complex music theory data structures
-- **PDF Rendering**: react-pdf (PDF.js wrapper) for accurate rendering
-- **State Management**: Zustand (lightweight, TypeScript-friendly)
+The custom harmony engine:
 
-### Backend: Python + FastAPI
-- **Why Python**: Best ecosystem for music analysis (music21, librosa)
-- **Why FastAPI**: Async support, automatic OpenAPI docs, fast performance
-- **OMR Options**:
-  - Audiveris (Java, most accurate)
-  - oemer (Python, neural network-based)
-  - Custom fallback for simple scores
+- groups simultaneous and nearby note onsets;
+- tests a vocabulary of triads, sevenths, ninths, suspensions, sixths, and altered dominants;
+- detects the key with pitch profiles constrained by the written key signature;
+- respects written meter changes when choosing harmonic rhythm;
+- smooths the progression with tonal voice-leading preferences;
+- labels Roman numerals, inversions, harmonic functions, secondary dominants, and cadences;
+- reports confidence and keeps passing notes separate from chord tones.
 
-### Key Libraries
-- **music21**: MIT's comprehensive music theory library
-- **pdf2image**: PDF to image conversion
-- **Pillow**: Image processing
-- **numpy**: Numerical operations for analysis
+Analysis runs once in a background worker after upload. The frontend polls a read-only status endpoint and receives partial page results while the remaining pages are processed.
 
-## Project Structure
+## Interface
 
-```
-music_for_dummies/
-├── frontend/                 # React TypeScript app
-│   ├── src/
-│   │   ├── components/       # UI components
-│   │   │   ├── PDFViewer/    # PDF rendering
-│   │   │   ├── Overlay/      # Interactive overlays
-│   │   │   ├── Tooltip/      # Music theory tooltips
-│   │   │   └── Sidebar/      # Analysis sidebar
-│   │   ├── hooks/            # Custom React hooks
-│   │   ├── store/            # Zustand state management
-│   │   ├── types/            # TypeScript interfaces
-│   │   ├── utils/            # Helper functions
-│   │   └── api/              # Backend API calls
-│   └── package.json
-│
-├── backend/                  # Python FastAPI server
-│   ├── app/
-│   │   ├── main.py           # FastAPI entry point
-│   │   ├── routers/          # API route handlers
-│   │   ├── services/         # Business logic
-│   │   │   ├── pdf_processor.py
-│   │   │   ├── omr_service.py
-│   │   │   └── music_analyzer.py
-│   │   ├── models/           # Pydantic models
-│   │   └── utils/            # Helper utilities
-│   └── requirements.txt
-│
-├── shared/                   # Shared type definitions
-│   └── types.ts
-│
-└── README.md
-```
+- **Score view:** function-colored chord regions anchored to the notation.
+- **Chord labels:** placed in a measured lane above each system to clear beams and stems.
+- **Inspector:** chord quality, inversion, confidence, source notes, chord tones, function, tonicization, cadence, and next chord.
+- **Harmonic map:** a scrollable whole-piece timeline grouped by measure and weighted by beat duration.
+- **Source badge:** distinguishes exact engraved-PDF reading from scan recognition.
 
-## Music Theory Data Model
+## Stack
 
-```typescript
-interface AnalysisResult {
-  pages: PageAnalysis[];
-  globalKey: Key;
-  modulations: Modulation[];
-  chordProgression: ChordProgression;
-}
+- Frontend: React, TypeScript, Vite
+- Backend: FastAPI, PyMuPDF, OpenCV, NumPy
+- No neural OMR runtime, MusicXML conversion, `music21`, or external analysis service is required.
 
-interface PageAnalysis {
-  pageNumber: number;
-  measures: Measure[];
-  imageUrl: string;
-}
+## Run locally
 
-interface Measure {
-  number: number;
-  boundingBox: BoundingBox;
-  beats: Beat[];
-  localKey: Key;
-  chords: ChordAnalysis[];
-}
+Prerequisites:
 
-interface ChordAnalysis {
-  symbol: string;           // "Cmaj7", "Am", "D7/F#"
-  notes: string[];          // ["C", "E", "G", "B"]
-  boundingBox: BoundingBox;
-  romanNumeral: string;     // "I", "vi", "V7"
-  function: ChordFunction;  // "tonic", "dominant", etc.
-  confidence: number;       // 0-1 confidence score
-}
+- Node.js 18 or newer
+- Python 3.10 or newer
 
-interface Modulation {
-  measureNumber: number;
-  fromKey: Key;
-  toKey: Key;
-  pivotChord?: ChordAnalysis;
-  reasoning: string;
-}
-```
-
-## Features
-
-### MVP (Current Implementation)
-- [x] PDF upload and full-screen display
-- [x] Page-by-page navigation
-- [x] Hover overlays for measures/chords
-- [x] Chord name and notes display
-- [x] Roman numeral analysis
-- [x] Key detection
-- [x] Mock data for demonstration
-
-### Future Enhancements
-- [ ] Real OMR integration (Audiveris/oemer)
-- [ ] ML-based chord detection improvement
-- [ ] Audio playback of chords
-- [ ] MIDI export
-- [ ] Annotation saving
-- [ ] Chrome extension version
-- [ ] DAW plugin (VST/AU)
-
-## Getting Started
-
-### Prerequisites
-- Node.js 18+
-- Python 3.10+
-- pip
-
-### Installation
+Install and start the backend:
 
 ```bash
-# Clone repository
-git clone https://github.com/juncho/music_for_dummies.git
-cd music_for_dummies
-
-# Install frontend dependencies
-cd frontend
-npm install
-
-# Install backend dependencies
-cd ../backend
+cd backend
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Start backend server
 uvicorn app.main:app --reload --port 8000
-
-# In another terminal, start frontend
-cd frontend
-npm run dev
 ```
 
-## API Endpoints
+In another terminal, install and start the frontend:
 
-- `POST /api/upload` - Upload PDF sheet music
-- `GET /api/analysis/{id}` - Get analysis results
-- `GET /api/page/{id}/{page}` - Get page image and overlays
-- `WebSocket /ws/analysis/{id}` - Real-time analysis updates
+```bash
+cd frontend
+npm install
+npm run dev -- --port 3000
+```
 
-## TODOs for Improving Accuracy
+Open [http://localhost:3000](http://localhost:3000).
 
-1. **Better OMR**: Integrate Audiveris for production-grade music recognition
-2. **ML Chord Detection**: Train custom model on annotated chord datasets
-3. **Voice Leading Analysis**: Track individual voices for better chord identification
-4. **Genre-Specific Models**: Jazz vs Classical vs Pop chord vocabularies
-5. **User Feedback Loop**: Allow users to correct detected chords
-6. **Ensemble Scores**: Support for full orchestral scores
+The Vite development server proxies `/api` and `/uploads` to the backend on port 8000.
 
-## License
+## Verify the build
 
-MIT License - See LICENSE file for details
+```bash
+cd frontend
+npm run build
+
+cd ../backend
+source .venv/bin/activate
+python -m unittest discover -s tests -v
+python -m compileall -q app tools tests
+```
+
+Large scan fixtures are checksum-pinned in `backend/tests/corpus/manifest.json`. Run them by setting `MUSIC_TEST_CORPUS_DIR` to the directory containing those PDFs; see `backend/tests/corpus/README.md`.
+
+The Playwright helpers in `backend/tools/` can inspect a running app:
+
+```bash
+cd backend
+source .venv/bin/activate
+python tools/probe.py "http://localhost:3000/?id=<upload-id>"
+python tools/shoot.py "http://localhost:3000/?id=<upload-id>"
+```
+
+## API
+
+- `GET /api/health` — service health
+- `POST /api/upload` — upload a PDF and start one background analysis job
+- `GET /api/analysis/{id}` — read job progress, partial results, or completed results
+- `POST /api/analysis/{id}/reanalyze` — explicitly discard the cache and rerun analysis
+- `/uploads/{id}/page_{n}.png` — rendered page image used by the overlays
+
+Completed analyses are cached as JSON beside the uploaded PDF and survive server restarts.
+
+## Current limits
+
+Direct vector reading depends on recognizable SMuFL-compatible music fonts. Other engraved formats and image-only files use the scan pipeline, whose confidence reflects the weaker source. The current CV fallback is aimed at conventional single-staff and grand-staff notation; dense orchestral scores, handwritten music, unusual clefs, and percussion notation need additional work.

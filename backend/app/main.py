@@ -5,10 +5,16 @@ Main entry point for the sheet music analysis API.
 """
 
 import os
+import warnings
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+# Suppress numpy deprecation warnings from third-party libraries (OpenCV, oemer, etc.)
+# These warnings come from dependencies using deprecated np.int instead of int
+warnings.filterwarnings('ignore', message='.*np\.int.*', category=DeprecationWarning)
+warnings.filterwarnings('ignore', message='.*np\.float.*', category=DeprecationWarning)
 
 from app.routers import upload, analysis
 

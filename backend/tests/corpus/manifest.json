@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "rootEnv": "MUSIC_TEST_CORPUS_DIR",
+  "cases": [
+    {
+      "id": "phone-scan-4263",
+      "filename": "IMG_4263.pdf",
+      "sha256": "ffef5dff53236a6d0a9a16137384125e00650f932ed2fafbe0c8954530ab7188",
+      "pages": 1,
+      "expected": {
+        "source": "vision",
+        "minSystems": 6,
+        "minMeasures": 18,
+        "minNotes": 100
+      }
+    },
+    {
+      "id": "phone-scan-4264",
+      "filename": "IMG_4264.pdf",
+      "sha256": "22203fa0dc62cf68f83a6bd2086a4dea6dc10e8dedb5c5286578035a7d20e7d0",
+      "pages": 1,
+      "expected": {
+        "source": "vision",
+        "minSystems": 5,
+        "minMeasures": 15,
+        "minNotes": 60
+      }
+    },
+    {
+      "id": "phone-scan-4265",
+      "filename": "IMG_4265.pdf",
+      "sha256": "b18721250bba89b12a44fb4e2f583a883a1f259f1701cccd1f3e73e93cdf2b4e",
+      "pages": 1,
+      "expected": {
+        "source": "vision",
+        "minSystems": 8,
+        "minMeasures": 30,
+        "minNotes": 150
+      }
+    }
+  ]
+}

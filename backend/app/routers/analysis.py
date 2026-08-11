@@ -1,104 +1,59 @@
 """
-Analysis retrieval and WebSocket endpoints.
+Analysis results.
+
+These endpoints are strictly read-only. Fetching a result never kicks off
+analysis; if a job was never started for an id the caller is told so.
 """
 
 import os
-import json
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
 
-from app.models import AnalysisResult
-from app.services.music_analyzer import get_analysis_result, analyze_music
+from fastapi import APIRouter, HTTPException
+
+from app.services import jobs, pipeline
 
 router = APIRouter()
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
 
 
-@router.get("/analysis/{file_id}", response_model=AnalysisResult)
-async def get_analysis(file_id: str):
-    """
-    Get analysis results for a previously uploaded PDF.
-    """
-    upload_path = os.path.join(UPLOAD_DIR, file_id)
+@router.get("/analysis/{upload_id}")
+async def get_analysis(upload_id: str):
+    job = jobs.get_job(upload_id)
+    if job is not None:
+        return job.snapshot()
 
-    if not os.path.exists(upload_path):
-        raise HTTPException(status_code=404, detail="Analysis not found")
+    cached = jobs.load_cached(upload_id, pipeline.cached_result_path(upload_id))
+    if cached is not None:
+        return cached.snapshot()
 
-    # Check if analysis is complete
-    analysis_file = os.path.join(upload_path, "analysis.json")
+    folder = os.path.join(UPLOAD_DIR, upload_id)
+    if not os.path.isdir(folder):
+        raise HTTPException(status_code=404, detail="Unknown upload id")
 
-    if os.path.exists(analysis_file):
-        with open(analysis_file, 'r') as f:
-            return json.load(f)
+    pdf_path = os.path.join(folder, "original.pdf")
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="Upload has no PDF")
 
-    # If no analysis file exists, generate mock analysis
-    result = await get_analysis_result(file_id)
-    return result
+    # The PDF survived a restart but the job did not; start it again once.
+    def work(job):
+        pipeline.analyze_upload(upload_id, pdf_path, job=job)
 
-
-@router.get("/page/{file_id}/{page_number}")
-async def get_page_image(file_id: str, page_number: int):
-    """
-    Get the rendered image for a specific page.
-    """
-    upload_path = os.path.join(UPLOAD_DIR, file_id)
-
-    if not os.path.exists(upload_path):
-        raise HTTPException(status_code=404, detail="Upload not found")
-
-    image_path = os.path.join(upload_path, f"page_{page_number}.png")
-
-    if not os.path.exists(image_path):
-        raise HTTPException(status_code=404, detail=f"Page {page_number} not found")
-
-    return FileResponse(image_path, media_type="image/png")
+    return jobs.submit(upload_id, work).snapshot()
 
 
-@router.websocket("/ws/analysis/{file_id}")
-async def analysis_websocket(websocket: WebSocket, file_id: str):
-    """
-    WebSocket endpoint for real-time analysis updates.
-    """
-    await websocket.accept()
+@router.post("/analysis/{upload_id}/reanalyze")
+async def reanalyze(upload_id: str):
+    folder = os.path.join(UPLOAD_DIR, upload_id)
+    pdf_path = os.path.join(folder, "original.pdf")
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="Unknown upload id")
 
-    try:
-        upload_path = os.path.join(UPLOAD_DIR, file_id)
+    cached = pipeline.cached_result_path(upload_id)
+    if os.path.exists(cached):
+        os.remove(cached)
+    jobs.forget(upload_id)
 
-        if not os.path.exists(upload_path):
-            await websocket.send_json({
-                "type": "error",
-                "message": "Upload not found"
-            })
-            await websocket.close()
-            return
+    def work(job):
+        pipeline.analyze_upload(upload_id, pdf_path, job=job)
 
-        # Perform analysis with progress updates
-        async for progress in analyze_music(file_id):
-            if progress["type"] == "progress":
-                await websocket.send_json({
-                    "type": "progress",
-                    "progress": progress["value"]
-                })
-            elif progress["type"] == "complete":
-                await websocket.send_json({
-                    "type": "complete",
-                    "result": progress["result"]
-                })
-                break
-            elif progress["type"] == "error":
-                await websocket.send_json({
-                    "type": "error",
-                    "message": progress["message"]
-                })
-                break
-
-    except WebSocketDisconnect:
-        print(f"WebSocket disconnected for {file_id}")
-    except Exception as e:
-        await websocket.send_json({
-            "type": "error",
-            "message": str(e)
-        })
-    finally:
-        await websocket.close()
+    return jobs.submit(upload_id, work).snapshot()
