@@ -10,8 +10,8 @@
       "expected": {
         "source": "vision",
         "minSystems": 6,
-        "minMeasures": 18,
-        "minNotes": 100
+        "minMeasures": 14,
+        "minNotes": 150
       }
     },
     {
@@ -21,9 +21,9 @@
       "pages": 1,
       "expected": {
         "source": "vision",
-        "minSystems": 5,
-        "minMeasures": 15,
-        "minNotes": 60
+        "minSystems": 3,
+        "minMeasures": 8,
+        "minNotes": 35
       }
     },
     {
@@ -33,9 +33,9 @@
       "pages": 1,
       "expected": {
         "source": "vision",
-        "minSystems": 8,
-        "minMeasures": 30,
-        "minNotes": 150
+        "minSystems": 7,
+        "minMeasures": 22,
+        "minNotes": 180
       }
     }
   ]

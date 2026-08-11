@@ -6,6 +6,7 @@ interface Props {
   pages: Page[];
   cadences: Cadence[];
   keyInfo?: KeyInfo;
+  keyCount?: number;
   hovered: string | null;
   selected: string | null;
   onHover: (id: string | null) => void;
@@ -24,6 +25,7 @@ export function HarmonyRibbon({
   pages,
   cadences,
   keyInfo,
+  keyCount = 1,
   hovered,
   selected,
   onHover,
@@ -58,7 +60,13 @@ export function HarmonyRibbon({
         <div>
           <h2>Harmonic map</h2>
           <p>
-            {keyInfo ? (
+            {keyInfo && keyCount > 1 ? (
+              <>
+                Romans use each chord&apos;s local key (most music is in{' '}
+                <strong>{keyInfo.name}</strong>). Colour shows function; arrows show a
+                dominant resolving.
+              </>
+            ) : keyInfo ? (
               <>
                 Everything is read in <strong>{keyInfo.name}</strong>. Colour shows what each
                 chord is doing; arrows show a dominant resolving.

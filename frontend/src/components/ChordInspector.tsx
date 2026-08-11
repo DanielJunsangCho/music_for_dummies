@@ -89,6 +89,12 @@ export function ChordInspector({ chord, next, cadence, pages, keyInfo, meter }: 
           <dt>Function</dt>
           <dd style={{ color }}>{FUNCTION_LABELS[chord.function]}</dd>
         </div>
+        {(chord.key || keyInfo?.name) && (
+          <div>
+            <dt>Key</dt>
+            <dd>{chord.key ?? keyInfo?.name}</dd>
+          </div>
+        )}
         <div>
           <dt>Quality</dt>
           <dd>{chord.quality}</dd>

@@ -37,5 +37,14 @@ class FunctionTests(unittest.TestCase):
         self.assertEqual(harmonic_function(6, 'minor sixth', self.key), 'subdominant')
 
 
+class KeyCompatibilityTests(unittest.TestCase):
+    def test_relative_major_and_minor_stay_compatible(self):
+        from app.services.harmony import _keys_compatible
+
+        self.assertTrue(_keys_compatible(Key(0, 'major'), Key(9, 'minor')))
+        self.assertTrue(_keys_compatible(Key(2, 'minor'), Key(5, 'major')))
+        self.assertFalse(_keys_compatible(Key(0, 'major'), Key(7, 'major')))
+
+
 if __name__ == '__main__':
     unittest.main()

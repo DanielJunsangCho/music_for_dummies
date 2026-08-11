@@ -136,6 +136,7 @@ def label_lanes(image, systems: list) -> dict:
 
 def serialize(upload_id: str, analyzed: list, reading: dict, partial: bool) -> dict:
     key = reading['key']
+    keys = reading.get('keys') or [key]
     spans_by_page = {}
     for page_number, span in reading['spans']:
         spans_by_page.setdefault(page_number, []).append(span)
@@ -205,6 +206,8 @@ def serialize(upload_id: str, analyzed: list, reading: dict, partial: bool) -> d
         chords = []
         for index, span in enumerate(spans_by_page.get(number, [])):
             top, bottom = extents.get(span.system_index, (0.0, height))
+            local_key = keys[span.key_index] if 0 <= span.key_index < len(keys) else key
+            sharps_pref = local_key.prefers_sharps
 
             chord_id = f'p{number}c{index}'
             member_ids = [note_ids[nid] for nid in span.note_ids if nid in note_ids]
@@ -215,7 +218,7 @@ def serialize(upload_id: str, analyzed: list, reading: dict, partial: bool) -> d
                 'system': span.system_index,
                 'measureNumber': measure_offset + span.measure_index + 1,
                 'symbol': span.symbol,
-                'root': H.pitch_name(span.root, key.prefers_sharps),
+                'root': H.pitch_name(span.root, sharps_pref),
                 'quality': span.quality,
                 'roman': span.roman,
                 'function': span.function,
@@ -226,7 +229,8 @@ def serialize(upload_id: str, analyzed: list, reading: dict, partial: bool) -> d
                 'inversion': span.inversion,
                 'bass': span.bass_name,
                 'tonicizes': span.tonicizes,
-                'pitchClasses': [H.pitch_name(pc, key.prefers_sharps)
+                'key': local_key.name,
+                'pitchClasses': [H.pitch_name(pc, sharps_pref)
                                  for pc in span.pitch_classes],
                 'notes': member_ids,
                 'box': {
@@ -297,6 +301,13 @@ def serialize(upload_id: str, analyzed: list, reading: dict, partial: bool) -> d
             'sharps': sharps,
             'scale': [H.pitch_name(pc, key.prefers_sharps) for pc in key.scale()],
         },
+        'keys': [{
+            'name': item.name,
+            'tonic': H.pitch_name(item.tonic, item.prefers_sharps),
+            'mode': item.mode,
+            'confidence': round(item.confidence, 3),
+            'scale': [H.pitch_name(pc, item.prefers_sharps) for pc in item.scale()],
+        } for item in keys],
         'meter': {
             'numerator': time_signature[0] if time_signature else None,
             'denominator': time_signature[1] if time_signature else None,

@@ -163,16 +163,32 @@ class ScoreImage:
     def __init__(self, gray: np.ndarray):
         self.gray = gray
         self.height, self.width = gray.shape[:2]
-        self.bw = binarize(gray)
-        # Engravers often print staff lines much lighter than noteheads, and
-        # a threshold tuned to the glyphs loses them. Lines are found on a
-        # permissive mask; a long horizontal opening rejects the extra noise
-        # it picks up.
-        self.faint = faint_mask(gray, self.bw)
-        white = estimate_staff_space(self.faint) or 17.0
-        self.line_thickness = estimate_line_thickness(self.faint) or 3.0
-        self.space = white + self.line_thickness
-        self.staff_lines = staff_line_mask(self.faint)
+        global_bw = binarize(gray)
+        self.photo = is_photo_like(gray, global_bw)
+
+        if self.photo:
+            # Phone photos: global thresholds flood the page. Use adaptive ink
+            # and short horizontal segments that tolerate wavy staff lines.
+            self.bw = photo_binarize(gray)
+            self.faint = self.bw
+            self.line_thickness = estimate_line_thickness(self.bw) or 2.0
+            self.space = 18.0  # refined once staves are found
+            kern_w = max(20, int(self.width * 0.05))
+            self.staff_lines = cv2.morphologyEx(
+                self.bw, cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (kern_w, 1)),
+            )
+        else:
+            self.bw = global_bw
+            # Engravers often print staff lines much lighter than noteheads, and
+            # a threshold tuned to the glyphs loses them. Lines are found on a
+            # permissive mask; a long horizontal opening rejects the extra noise
+            # it picks up.
+            self.faint = faint_mask(gray, self.bw)
+            white = estimate_staff_space(self.faint) or 17.0
+            self.line_thickness = estimate_line_thickness(self.faint) or 3.0
+            self.space = white + self.line_thickness
+            self.staff_lines = staff_line_mask(self.faint)
 
         repair = max(5, int(self.line_thickness * 2 + 1))
         self._repair = cv2.getStructuringElement(cv2.MORPH_RECT, (1, repair))
@@ -236,6 +252,33 @@ def faint_mask(gray: np.ndarray, bw: np.ndarray) -> np.ndarray:
     paper = float(np.percentile(gray, 92))
     thr = max(120.0, paper - max(28.0, paper * 0.14))
     return np.maximum(bw, (gray < thr).astype(np.uint8))
+
+
+def is_photo_like(gray: np.ndarray, bw: np.ndarray) -> bool:
+    """
+    Phone photos of scores have uneven lighting and mid-grey paper, so the
+    global Otsu/faint masks paint most of the page as ink. Clean flatbed
+    scans stay well below these fractions.
+    """
+    faint = faint_mask(gray, bw)
+    return float(bw.mean()) > 0.22 or float(faint.mean()) > 0.35
+
+
+def photo_binarize(gray: np.ndarray) -> np.ndarray:
+    """
+    Locally adaptive ink mask for wrinkled, glare-lit phone photos.
+
+    CLAHE equalises page lighting; adaptive threshold then keeps thin staff
+    lines and noteheads without claiming the whole shadowed page as ink.
+    """
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(16, 16))
+    equalized = clahe.apply(gray)
+    adaptive = cv2.adaptiveThreshold(
+        equalized, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
+        51, 12,
+    )
+    return (adaptive > 0).astype(np.uint8)
 
 
 def _vertical_runs(bw: np.ndarray, want_ink: bool, lo: int, hi: int) -> list:
@@ -318,19 +361,57 @@ def _rasterize(page, scale: float) -> np.ndarray:
     return buf[:, :, 0].copy()
 
 
+def _full_page_images(page) -> list:
+    """
+    Embedded images that cover almost the whole page.
+
+    Scanned scores often store the same plate twice (or a low-res preview
+    under a high-res plate). Those still count as scans: there is no vector
+    music to re-render, only pixels.
+    """
+    if page.rect.width <= 0 or page.rect.height <= 0:
+        return []
+    page_area = float(page.rect.width * page.rect.height)
+    covers = []
+    for info in page.get_image_info(xrefs=True):
+        bbox = info.get('bbox')
+        width = int(info.get('width') or 0)
+        height = int(info.get('height') or 0)
+        if not bbox or width <= 0 or height <= 0:
+            continue
+        x0, y0, x1, y1 = bbox
+        area = max(0.0, float(x1 - x0)) * max(0.0, float(y1 - y0))
+        if area >= page_area * 0.80:
+            covers.append(info)
+    return covers
+
+
 def _native_scale(page) -> Optional[float]:
     """
-    For a scanned page (one full-page image, no vector art), the scale that
+    For a scanned page (full-page image, no vector art), the scale that
     renders it at the embedded image's own resolution. Rendering above that
     only upsamples and costs time.
     """
-    images = page.get_images(full=True)
-    if len(images) != 1 or page.get_drawings():
+    if page.get_drawings():
         return None
-    width = images[0][2]
-    if not width or page.rect.width <= 0:
-        return None
-    return float(width) / float(page.rect.width)
+    covers = _full_page_images(page)
+    if not covers:
+        images = page.get_images(full=True)
+        if len(images) != 1:
+            return None
+        width = images[0][2]
+        if not width or page.rect.width <= 0:
+            return None
+        return float(width) / float(page.rect.width)
+
+    best = max(covers, key=lambda info: int(info.get('width') or 0) * int(info.get('height') or 0))
+    return float(best['width']) / float(page.rect.width)
+
+
+def _clamp_scale(page, scale: float) -> float:
+    while (page.rect.width * scale) * (page.rect.height * scale) > MAX_PIXELS:
+        scale *= 0.85
+    return min(12.0, max(0.5, scale))
 
 
 def render_page(page, target_space: float = 18.0) -> tuple:
@@ -345,9 +426,31 @@ def render_page(page, target_space: float = 18.0) -> tuple:
     scanned at and then resampled, since there is no more detail to get.
     """
     native = _native_scale(page)
-    is_vector = native is None
-    base = min(4.0, max(1.0, native)) if native else 2.0
 
+    # Scanned plate: stay at native resolution. Never fall through to the
+    # vector path, which will happily undersample a 115-pt page box.
+    if native is not None:
+        scale = _clamp_scale(page, native)
+        gray = _rasterize(page, scale)
+        space = estimate_staff_space(faint_mask(gray, binarize(gray)))
+        if not space or space <= 0:
+            return gray, scale
+
+        ratio = float(target_space) / float(space)
+        # Upsampling a scan invents ink; only do a little when the plate is
+        # genuinely too small to measure staves.
+        if ratio > 1.25 and gray.shape[0] * gray.shape[1] < MAX_PIXELS * 0.35:
+            ratio = min(ratio, 2.0)
+            if gray.shape[0] * gray.shape[1] * ratio * ratio > MAX_PIXELS:
+                ratio = math.sqrt(MAX_PIXELS / float(gray.shape[0] * gray.shape[1]))
+            if ratio > 1.05:
+                gray = cv2.resize(gray, None, fx=ratio, fy=ratio,
+                                  interpolation=cv2.INTER_CUBIC)
+                return gray, scale * ratio
+        return gray, scale
+
+    # Vector / engraved: probe at a modest scale, then re-render crisply.
+    base = 2.0
     gray = _rasterize(page, base)
     space = estimate_staff_space(faint_mask(gray, binarize(gray)))
     if not space or space <= 0:
@@ -357,25 +460,11 @@ def render_page(page, target_space: float = 18.0) -> tuple:
     if 0.85 <= ratio <= 1.2:
         return gray, base
 
-    if is_vector:
-        scale = base * ratio
-        while (page.rect.width * scale) * (page.rect.height * scale) > MAX_PIXELS:
-            scale *= 0.85
-        scale = min(12.0, max(0.5, scale))
-        crisp = _rasterize(page, scale)
-        check = estimate_staff_space(faint_mask(crisp, binarize(crisp)))
-        if check and check > 3:
-            return crisp, scale
-        return gray, base
-
-    if ratio > 1.0:
-        ratio = min(ratio, 3.5)
-        if gray.shape[0] * gray.shape[1] * ratio * ratio > MAX_PIXELS:
-            ratio = math.sqrt(MAX_PIXELS / float(gray.shape[0] * gray.shape[1]))
-        if ratio > 1.05:
-            gray = cv2.resize(gray, None, fx=ratio, fy=ratio,
-                              interpolation=cv2.INTER_CUBIC)
-            return gray, base * ratio
+    scale = _clamp_scale(page, base * ratio)
+    crisp = _rasterize(page, scale)
+    check = estimate_staff_space(faint_mask(crisp, binarize(crisp)))
+    if check and check > 3:
+        return crisp, scale
     return gray, base
 
 
@@ -385,6 +474,11 @@ def render_page(page, target_space: float = 18.0) -> tuple:
 
 def detect_staves(img: ScoreImage) -> list:
     """Find 5-line staves as evenly spaced peaks of long horizontal ink."""
+    if getattr(img, 'photo', False):
+        staves = detect_staves_photo(img)
+        if staves:
+            return staves
+
     lines = img.staff_lines
     h, w = lines.shape
     proj = lines.sum(axis=1).astype(np.float64)
@@ -415,7 +509,275 @@ def detect_staves(img: ScoreImage) -> list:
         else:
             merged.append(y)
 
-    return _staves_from_lines(merged, lines, space)
+    staves = _staves_from_lines(merged, lines, space)
+    # Clean scans that still look like photos of wrinkled paper sometimes
+    # defeat the global projection; fall back to the photo finder.
+    if len(staves) < 2 and not getattr(img, 'photo', False):
+        photo_staves = detect_staves_photo(img)
+        if len(photo_staves) > len(staves):
+            return photo_staves
+    return staves
+
+
+def detect_staves_photo(img: ScoreImage) -> list:
+    """
+    Recover staves on phone photos where wrinkles break long horizontal runs.
+
+    1. Vote for staff rows in vertical page strips (short kernels tolerate waves).
+    2. Locate system bands from the smoothed vote profile.
+    3. Inside each band, fit a 5-line staff by projection chaining *and*
+       Hough segments, then keep the non-overlapping set.
+    """
+    segs = img.staff_lines
+    h, w = segs.shape
+    if h < 40 or w < 40 or segs.mean() <= 0:
+        return []
+
+    votes = np.zeros(h, np.float64)
+    bands_n = 8
+    for band in range(bands_n):
+        x1 = int(band * w / bands_n)
+        x2 = int((band + 1) * w / bands_n)
+        proj = segs[:, x1:x2].sum(axis=1).astype(np.float64)
+        band_w = max(1, x2 - x1)
+        thr = max(band_w * 0.15, float(np.percentile(proj, 75)) * 0.30)
+        votes += np.clip(proj / max(thr, 1.0), 0.0, 3.0)
+
+    page_space = _estimate_space_from_votes(votes)
+    img.space = page_space
+
+    system_bands = _system_bands_from_votes(votes, h)
+    candidates = []
+    for y0, y1 in system_bands:
+        chained = _chain_staff_in_band(votes, y0, y1, page_space)
+        if chained is not None:
+            candidates.append(chained)
+        hough = _hough_staff_in_band(segs, y0, y1, page_space)
+        if hough is not None:
+            candidates.append(hough)
+        # Perspective: upper systems can be ~20% smaller than the page median.
+        local = page_space * 0.85
+        if abs(local - page_space) >= 1.0:
+            chained = _chain_staff_in_band(votes, y0, y1, local)
+            if chained is not None:
+                candidates.append(chained)
+            hough = _hough_staff_in_band(segs, y0, y1, local)
+            if hough is not None:
+                candidates.append(hough)
+
+    chains = _merge_staff_candidates(candidates, page_space)
+    staves = []
+    for chain in chains:
+        x_left, x_right = _staff_extent(segs, chain)
+        if x_right - x_left < w * 0.35:
+            x_left, x_right = int(w * 0.05), int(w * 0.95)
+        staves.append(Staff(
+            line_ys=[float(v) for v in chain],
+            x_left=float(x_left),
+            x_right=float(x_right),
+        ))
+    if len(staves) >= 2:
+        median_space = float(np.median([s.space for s in staves]))
+        # Drop compressed false staves once the page's real space is known.
+        staves = [s for s in staves if s.space >= median_space * 0.72]
+    if staves:
+        img.space = float(np.median([s.space for s in staves]))
+    return staves
+
+
+def _estimate_space_from_votes(votes: np.ndarray) -> float:
+    peaks = []
+    y = 0
+    h = len(votes)
+    while y < h:
+        if votes[y] >= 0.7:
+            y2 = y
+            while y2 + 1 < h and votes[y2 + 1] >= 0.7:
+                y2 += 1
+            peaks.append(y + int(np.argmax(votes[y:y2 + 1])))
+            y = y2 + 1
+        else:
+            y += 1
+    gaps = np.diff(peaks) if len(peaks) >= 2 else np.array([])
+    cand = gaps[(gaps >= 12) & (gaps <= 28)] if len(gaps) else np.array([])
+    return float(np.median(cand)) if len(cand) >= 3 else 18.0
+
+
+def _system_bands_from_votes(votes: np.ndarray, height: int) -> list:
+    win = max(40, height // 80)
+    smoothed = np.convolve(votes, np.ones(win) / win, mode='same')
+    thr = max(1.0, float(np.percentile(smoothed, 65)))
+    bands = []
+    y = 0
+    while y < height:
+        if smoothed[y] >= thr:
+            y2 = y
+            while y2 + 1 < height and smoothed[y2 + 1] >= thr:
+                y2 += 1
+            if y2 - y >= 24:
+                bands.append((y, y2))
+            y = y2 + 1
+        else:
+            y += 1
+    out = []
+    for y0, y1 in bands:
+        if y1 < height * 0.08 or y0 > height * 0.92:
+            continue
+        if (y1 - y0) > height * 0.14:
+            continue
+        out.append((y0, y1))
+    return out
+
+
+def _chain_staff_in_band(votes: np.ndarray, y0: int, y1: int,
+                         page_space: float) -> Optional[list]:
+    h = len(votes)
+    a = max(0, y0 - int(page_space))
+    b = min(h, y1 + int(page_space))
+    local = votes[a:b]
+    peaks = []
+    y = 0
+    while y < len(local):
+        if local[y] >= 0.5:
+            y2 = y
+            while y2 + 1 < len(local) and local[y2 + 1] >= 0.5:
+                y2 += 1
+            peaks.append(a + y + int(np.argmax(local[y:y2 + 1])))
+            y = y2 + 1
+        else:
+            y += 1
+    merged = []
+    for peak in peaks:
+        if merged and peak - merged[-1] < 3:
+            if votes[peak] > votes[merged[-1]]:
+                merged[-1] = peak
+        else:
+            merged.append(peak)
+    peaks = merged
+
+    best = None
+    best_score = -1.0
+    for i in range(len(peaks)):
+        for j in range(i + 1, min(i + 7, len(peaks))):
+            space = peaks[j] - peaks[i]
+            if abs(space - page_space) > page_space * 0.45:
+                continue
+            if not (10 <= space <= 32):
+                continue
+            chain = [peaks[i], peaks[j]]
+            cursor = j
+            ok = True
+            for _ in range(3):
+                target = chain[-1] + space
+                best_peak = None
+                best_dist = 1e9
+                best_k = None
+                for k in range(cursor + 1, min(cursor + 7, len(peaks))):
+                    dist = abs(peaks[k] - target)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_peak = peaks[k]
+                        best_k = k
+                if best_peak is None or best_dist > max(5.5, space * 0.45):
+                    ok = False
+                    break
+                chain.append(best_peak)
+                cursor = best_k
+            if not ok:
+                continue
+            gaps = np.diff(chain).astype(np.float64)
+            score = float(np.mean([votes[yy] for yy in chain])) / (1.0 + float(np.std(gaps)))
+            if score > best_score:
+                best_score = score
+                best = chain
+    if best is None or best_score < 0.9:
+        return None
+    return [float(v) for v in best]
+
+
+def _hough_staff_in_band(segs: np.ndarray, y0: int, y1: int,
+                         page_space: float) -> Optional[list]:
+    h, w = segs.shape
+    a = max(0, y0 - 15)
+    b = min(h, y1 + 15)
+    band = (segs[a:b] * 255).astype(np.uint8)
+    min_len = max(30, w // 16)
+    lines = cv2.HoughLinesP(
+        band, 1, np.pi / 180,
+        threshold=max(20, min_len // 4),
+        minLineLength=min_len,
+        maxLineGap=30,
+    )
+    if lines is None:
+        return None
+
+    ys = []
+    for x1, yy1, x2, yy2 in lines[:, 0]:
+        if abs(int(yy2) - int(yy1)) > abs(int(x2) - int(x1)) * 0.12:
+            continue
+        ys.append(a + 0.5 * (float(yy1) + float(yy2)))
+    if len(ys) < 5:
+        return None
+
+    ys = np.sort(np.asarray(ys, dtype=np.float64))
+    clusters = []
+    for y in ys:
+        if not clusters or abs(y - float(np.mean(clusters[-1]))) > page_space * 0.35:
+            clusters.append([float(y)])
+        else:
+            clusters[-1].append(float(y))
+    centers = [float(np.median(cluster)) for cluster in clusters]
+    if len(centers) < 5:
+        return None
+
+    best = None
+    best_err = 1e9
+    target = page_space if page_space >= 10 else 16.0
+    for i in range(len(centers) - 4):
+        window = centers[i:i + 5]
+        gaps = np.diff(window)
+        med = float(np.median(gaps))
+        if med < 10.0 or med > 30.0:
+            continue
+        if not np.all((gaps > 8.0) & (gaps < 34.0)):
+            continue
+        err = float(np.mean(np.abs(gaps - target)) + np.std(gaps))
+        if err < best_err:
+            best_err = err
+            best = window
+    return best
+
+
+def _merge_staff_candidates(candidates: list, page_space: float) -> list:
+    """Keep one staff per vertical region; tolerate mild perspective shrink."""
+    scored = []
+    for staff in candidates:
+        if not staff or len(staff) != 5:
+            continue
+        gaps = np.diff(staff).astype(np.float64)
+        med = float(np.median(gaps))
+        if med < 10.0 or med > 30.0:
+            continue
+        # Allow smaller upper systems; reject only extreme half-space junk
+        # when the page median is clearly larger.
+        if page_space >= 15 and med < page_space * 0.55:
+            continue
+        if float(np.std(gaps)) > max(4.2, med * 0.32):
+            continue
+        score = -float(np.std(gaps))
+        scored.append((score, [float(v) for v in staff]))
+    scored.sort(reverse=True, key=lambda item: item[0])
+
+    selected = []
+    for _, staff in scored:
+        center = 0.5 * (staff[0] + staff[-1])
+        height = staff[-1] - staff[0]
+        if any(abs(center - 0.5 * (other[0] + other[-1])) < height * 0.55
+               for other in selected):
+            continue
+        selected.append(staff)
+    selected.sort(key=lambda staff: staff[0])
+    return selected
 
 
 def _staves_from_lines(line_ys: list, lines_mask: np.ndarray, space: float) -> list:
@@ -480,7 +842,7 @@ def _staff_extent(lines_mask: np.ndarray, line_ys: list) -> tuple:
     return int(cols[0]), int(cols[-1])
 
 
-def group_systems(staves: list) -> list:
+def group_systems(staves: list, photo: bool = False) -> list:
     """Group staves into systems; braced staves sit closer than system gaps."""
     if not staves:
         return []
@@ -490,7 +852,12 @@ def group_systems(staves: list) -> list:
 
     gaps = [staves[i + 1].top - staves[i].bottom for i in range(len(staves) - 1)]
     median_space = float(np.median([s.space for s in staves]))
-    threshold = min(median_space * 6.0, float(np.median(gaps)) * 0.7)
+    # Phone guitar scores are single-staff systems. A loose threshold merges
+    # neighbouring systems on wrinkled pages where vertical gaps compress.
+    if photo:
+        threshold = median_space * 2.8
+    else:
+        threshold = min(median_space * 6.0, float(np.median(gaps)) * 0.7)
 
     systems, current = [], [staves[0]]
     for staff, gap in zip(staves[1:], gaps):
@@ -615,6 +982,13 @@ def detect_key_signature(img: ScoreImage, staff: Staff) -> tuple:
     votes = sum(1 if g['kind'] == 'sharp' else -1 for g in run)
     sharp_err = fit_error('sharp') - (0.6 if votes > 0 else 0.0)
     flat_err = fit_error('flat') - (0.6 if votes < 0 else 0.0)
+
+    best_err = min(sharp_err, flat_err)
+    # Fingerings, string numbers and barre marks often sit where a key
+    # signature would, and a bad signature rewrites every pitch on the page.
+    # Prefer "no signature" over a fit that does not match the plate.
+    if best_err > 0.85:
+        return 0, clef_end + space * 2.5
 
     sharps = count if sharp_err <= flat_err else -count
     return sharps, run[-1]['x2'] + space * 3.0
@@ -860,17 +1234,20 @@ def detect_barlines(img: ScoreImage, system: System, noteheads: list) -> list:
     overshooting, and carry no notehead (a stem always ends in one).
     """
     results = []
+    photo = getattr(img, 'photo', False)
     for staff in system.staves:
         top, bottom = int(max(0, staff.top)), int(min(img.height - 1, staff.bottom))
         if bottom <= top:
             continue
         space = staff.space
-        max_width = max(3, int(space * 0.6))
-        overshoot = space * 0.75
+        max_width = max(3, int(space * (0.85 if photo else 0.6)))
+        overshoot = space * (1.1 if photo else 0.75)
+        # Wavy phone photos rarely keep a barline covering 90% of every row.
+        min_coverage = 0.72 if photo else 0.90
 
         band = img.no_staff[top:bottom + 1, :]
         coverage = band.sum(axis=0) / float(band.shape[0])
-        xs = np.flatnonzero(coverage >= 0.90)
+        xs = np.flatnonzero(coverage >= min_coverage)
         if len(xs) == 0:
             results.append([])
             continue
@@ -906,11 +1283,14 @@ def detect_barlines(img: ScoreImage, system: System, noteheads: list) -> list:
             while y_dn < img.height - 1 and col[y_dn + 1]:
                 y_dn += 1
 
-            if y_up > top + space * 0.4 or y_dn < bottom - space * 0.4:
+            top_slack = space * (0.65 if photo else 0.4)
+            bot_slack = space * (0.65 if photo else 0.4)
+            if y_up > top + top_slack or y_dn < bottom - bot_slack:
                 continue
             if (top - y_up) > overshoot or (y_dn - bottom) > overshoot:
                 continue
-            if any(abs(n.cx - cx) < space * 0.85 for n in staff_notes):
+            head_clear = space * (0.65 if photo else 0.85)
+            if any(abs(n.cx - cx) < head_clear for n in staff_notes):
                 continue
             bars.append(cx)
         results.append(bars)
@@ -1064,13 +1444,60 @@ def read_page(page, target_space: float = 18.0) -> tuple:
     return geo, deskewed
 
 
+def _sharps_for_key(tonic: int, mode: str) -> int:
+    """Circle-of-fifths signature for a major key or its relative major."""
+    major_tonic = tonic if mode == 'major' else (tonic + 3) % 12
+    sharp_tonics = {0: 0, 7: 1, 2: 2, 9: 3, 4: 4, 11: 5, 6: 6, 1: 7}
+    flat_tonics = {0: 0, 5: -1, 10: -2, 3: -3, 8: -4, 1: -5, 6: -6}
+    if major_tonic in sharp_tonics and major_tonic in flat_tonics:
+        # C / ambiguous enharmonics: prefer the smaller alteration.
+        sharp, flat = sharp_tonics[major_tonic], flat_tonics[major_tonic]
+        return sharp if abs(sharp) <= abs(flat) else flat
+    if major_tonic in sharp_tonics:
+        return sharp_tonics[major_tonic]
+    return flat_tonics.get(major_tonic, 0)
+
+
+def _reconcile_key_signature(img: ScoreImage, geo: PageGeometry) -> None:
+    """
+    Drop a scanned key signature that fights the notes on the page.
+
+    A misread signature (3 sharps on a 1-flat plate) rewrites every pitch and
+    makes later harmony unrecoverable. Spell once with no signature, read the
+    key from those natural pitches, then re-spell with the implied signature.
+    """
+    if not geo.noteheads or not geo.systems:
+        return
+    from app.services import harmony as H
+
+    written = geo.systems[0].staves[0].key_sharps if geo.systems[0].staves else 0
+    saved = []
+    for system in geo.systems:
+        for staff in system.staves:
+            saved.append((staff, staff.key_sharps))
+            staff.key_sharps = 0
+    apply_pitches(img, geo)
+
+    free = H.detect_key(H.profile_from_notes(geo.noteheads), None)
+    implied = _sharps_for_key(free.tonic, free.mode)
+    if abs(implied - written) < 2:
+        for staff, value in saved:
+            staff.key_sharps = value
+        apply_pitches(img, geo)
+        return
+
+    for staff, _ in saved:
+        staff.key_sharps = implied
+    apply_pitches(img, geo)
+
+
 def analyze_page_geometry(gray: np.ndarray) -> tuple:
     gray, skew = deskew(gray)
     img = ScoreImage(gray)
 
     staves = detect_staves(img)
     img.strip_staff_lines(staves)
-    systems = group_systems(staves)
+    systems = group_systems(staves, photo=getattr(img, 'photo', False))
     read_staff_headers(img, systems)
     noteheads = detect_noteheads(img, systems)
     measures = build_measures(img, systems, noteheads)
@@ -1083,6 +1510,7 @@ def analyze_page_geometry(gray: np.ndarray) -> tuple:
         skew_deg=skew,
     )
     apply_pitches(img, geo)
+    _reconcile_key_signature(img, geo)
     return geo, gray
 
 

@@ -53,6 +53,8 @@ export interface Chord {
   inversion: number;
   bass: string | null;
   tonicizes: string | null;
+  /** Local key used for this chord's Roman numeral (multi-song books). */
+  key?: string;
   pitchClasses: string[];
   notes: string[];
   box: Box;
@@ -100,7 +102,7 @@ export interface KeyInfo {
   tonic: string;
   mode: string;
   confidence: number;
-  sharps: number | null;
+  sharps?: number | null;
   scale: string[];
 }
 
@@ -118,6 +120,8 @@ export interface Analysis {
   error?: string;
   partial?: boolean;
   key?: KeyInfo;
+  /** Distinct local keys when a book contains more than one song/tonality. */
+  keys?: KeyInfo[];
   meter?: Meter;
   /** How the notation was read: from the PDF's own glyphs, or from the pixels. */
   source?: 'engraved' | 'scanned' | 'mixed';

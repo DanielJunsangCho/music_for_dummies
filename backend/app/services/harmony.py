@@ -590,50 +590,132 @@ def finalize_span(span: ChordSpan, candidates: list, chosen: int) -> None:
         span.inversion = {0: 0, 4: 1, 3: 1, 7: 2, 10: 3, 11: 3}.get(interval, 0)
 
 
+def _onset_pitch_classes(group: list) -> set:
+    return {n.midi % 12 for n in group if n.midi}
+
+
+def _onset_bass(group: list) -> Optional[int]:
+    pitched = [n.midi for n in group if n.midi]
+    return min(pitched) if pitched else None
+
+
+def _should_split_onsets(current: list, nxt: list, key: Optional[Key],
+                         already: int, soft_cap: int) -> bool:
+    """
+    Whether the next onset starts a new chord rather than decorating this one.
+
+    Printed Jobim guitar charts usually change once mid-bar. Walking basses and
+    inner-voice motion look like new chords if the bar is too eager to split,
+    so the second change in a bar needs stronger evidence than the first.
+    """
+    cur_notes = [n for g in current for n in g]
+    nxt_pcs = _onset_pitch_classes(nxt)
+    cur_pcs = {n.midi % 12 for n in cur_notes if n.midi}
+    if not nxt_pcs or not cur_pcs:
+        return False
+
+    new_tones = nxt_pcs - cur_pcs
+    shared = nxt_pcs & cur_pcs
+    if not new_tones:
+        return False
+
+    # Need a real vertical event, not a single melody note.
+    if len(nxt_pcs) < 2 and len(nxt) < 2:
+        return False
+
+    cur_bass = _onset_bass(cur_notes)
+    nxt_bass = _onset_bass(nxt)
+    bass_moved = (
+        cur_bass is not None and nxt_bass is not None
+        and (cur_bass % 12) != (nxt_bass % 12)
+        and abs(nxt_bass - cur_bass) >= 3
+    )
+
+    alone = score_chord(profile_from_notes(cur_notes),
+                        cur_bass % 12 if cur_bass is not None else None, key)
+    merged_notes = cur_notes + list(nxt)
+    merged_bass = min(n.midi for n in merged_notes if n.midi)
+    merged = score_chord(profile_from_notes(merged_notes), merged_bass % 12, key)
+    alone_score = alone[0][0] if alone else 0.0
+    merged_score = merged[0][0] if merged else 0.0
+    alone_root = alone[0][1] if alone else None
+    merged_root = merged[0][1] if merged else None
+    drop = alone_score - merged_score
+    root_changed = alone_root is not None and alone_root != merged_root
+
+    # After the usual half-bar change, demand a clearer break.
+    threshold = 0.16 if already >= soft_cap else 0.09
+    if bass_moved and root_changed and drop > threshold - 0.03:
+        return True
+    if len(new_tones) >= 2 and root_changed and drop > threshold:
+        return True
+    if len(new_tones) >= 2 and len(shared) <= 1 and drop > threshold + 0.02:
+        return True
+    if already < soft_cap and bass_moved and len(new_tones) >= 1 and drop > 0.08:
+        return True
+    return False
+
+
 def choose_harmonic_rhythm(measure, space: float, key: Optional[Key],
                            options: tuple = (1, 2, 4),
                            beats_per_measure: float = 4.0) -> list:
     """
-    Try each harmonic rhythm the meter allows and keep the reading that
-    explains the notes best once extra chord changes are penalised.
+    Segment a measure by musical onsets, not equal-width slices.
+
+    Equal beat buckets hide half-bar changes that guitar charts print above
+    the staff. Onsets are walked left to right; a new chord starts when the
+    bass and pitch-class content stop fitting the chord already under way.
+    Meter still caps how many chords a bar may hold.
     """
-    best_result, best_score = None, -1e9
-    for divisions in options:
-        buckets = _segment_measure(measure, space, divisions)
-        if not buckets:
+    onsets = group_onsets(measure.noteheads, space)
+    if not onsets:
+        return []
+
+    max_chords = max(options) if options else 4
+    # Guitar charts of this repertoire almost always change once per bar;
+    # allow more only when the evidence is strong.
+    soft_cap = 2 if beats_per_measure >= 3 else 2
+    segments: list = [[onsets[0]]]
+    for group in onsets[1:]:
+        if len(segments) >= max_chords:
+            segments[-1].append(group)
             continue
+        if _should_split_onsets(segments[-1], group, key, len(segments), soft_cap):
+            segments.append([group])
+        else:
+            segments[-1].append(group)
 
-        entries, weighted, evidence = [], 0.0, 0.0
-        for slot, groups in buckets:
-            made = _span_from_groups(groups, measure, space, divisions, slot, key,
-                                     beats_per_measure)
-            if made is None:
-                continue
-            span, raw, candidates = made
-            entries.append((span, candidates))
-
-            # A slot holding one or two notes fits almost any chord, so it is
-            # weak evidence for a chord change however well it scores. Weight
-            # each slot by how much it actually pins down, otherwise finer
-            # subdivisions always win by fitting noise.
-            distinct = len({n.midi % 12 for n in span.notes if n.midi})
-            weight = min(1.0, distinct / 3.0) ** 2
-            weighted += raw * weight
-            evidence += weight
-        if not entries:
+    # Assign each segment a beat slot from its horizontal centre so the
+    # ribbon still knows where in the bar the change landed.
+    width = max(1e-6, measure.x2 - measure.x1)
+    entries = []
+    for groups in segments:
+        notes = [n for g in groups for n in g]
+        cx = sum(n.cx for n in notes) / len(notes)
+        slot = int((cx - measure.x1) / width * max(1, int(beats_per_measure)))
+        slot = min(max(0, slot), max(0, int(beats_per_measure) - 1))
+        made = _span_from_groups(groups, measure, space, max(1, int(beats_per_measure)),
+                                 slot, key, beats_per_measure)
+        if made is None:
             continue
+        span, _raw, candidates = made
+        # Duration: from this segment's left edge to the next, or the bar end.
+        span.x1 = float(min(n.x1 for n in notes))
+        span.x2 = float(max(n.x2 for n in notes))
+        entries.append((span, candidates))
 
-        if evidence <= 0:
-            continue
-        score = weighted / evidence - 0.11 * (len(entries) - 1)
-        symbols = [(s.root, s.quality) for s, _ in entries]
-        if len(set(symbols)) < len(symbols):
-            score -= 0.06 * (len(symbols) - len(set(symbols)))
+    if not entries:
+        return []
 
-        if score > best_score:
-            best_score, best_result = score, entries
+    # Stretch each span to meet its neighbour so the overlay has no gaps.
+    for index, (span, _) in enumerate(entries):
+        left = measure.x1 if index == 0 else (entries[index - 1][0].x2 + span.x1) / 2
+        right = measure.x2 if index == len(entries) - 1 else (span.x2 + entries[index + 1][0].x1) / 2
+        span.x1, span.x2 = float(left), float(right)
+        span.beats = max(0.5, beats_per_measure / len(entries))
+        span.beat = index * span.beats
 
-    return best_result or []
+    return entries
 
 
 def _merge_repeats(spans: list) -> list:
@@ -721,86 +803,240 @@ def smooth_sequence(candidates: list, key: Key, weight: float = 1.0) -> list:
     return path
 
 
+def _page_key_signature(geo) -> Optional[int]:
+    votes = {}
+    for system in geo.systems:
+        for staff in system.staves:
+            votes[staff.key_sharps] = votes.get(staff.key_sharps, 0) + 1
+    if not votes:
+        return None
+    return max(votes.items(), key=lambda kv: (kv[1], -abs(kv[0])))[0]
+
+
+def _key_for_notes(noteheads: list, key_sharps: Optional[int] = None) -> Key:
+    profile = [0.0] * 12
+    for pc, weight in enumerate(profile_from_notes(noteheads)):
+        profile[pc] += weight
+    return detect_key(profile, key_sharps)
+
+
+def _keys_compatible(a: Optional[Key], b: Optional[Key]) -> bool:
+    """Same key, or relative major/minor — keep them as one section."""
+    if a is None or b is None:
+        return False
+    if a.tonic == b.tonic and a.mode == b.mode:
+        return True
+    if a.mode == 'major' and b.mode == 'minor' and b.tonic == (a.tonic + 9) % 12:
+        return True
+    if a.mode == 'minor' and b.mode == 'major' and a.tonic == (b.tonic + 9) % 12:
+        return True
+    return False
+
+
+def segment_keys(pages: list) -> list:
+    """
+    Split a book into local keys.
+
+    Scanned songbooks misread key signatures often, so the pitch profile of
+    each page decides the key. Adjacent pages stay in one section unless the
+    new key persists for two pages in a row — a one-page blip is noise, not a
+    modulation.
+    """
+    page_infos = []
+    for entry in pages:
+        geo = entry['geometry']
+        notes = geo.noteheads
+        # Signature is only a soft hint: hard-filtering by a wrong signature
+        # is how a D-minor bossa ends up labelled A major.
+        free = _key_for_notes(notes, None) if notes else None
+        sharps = _page_key_signature(geo)
+        hinted = _key_for_notes(notes, sharps) if notes and sharps is not None else free
+        key = free
+        if hinted is not None and free is not None:
+            if (hinted.tonic, hinted.mode) == (free.tonic, free.mode):
+                key = hinted
+            elif hinted.confidence > free.confidence + 0.25:
+                key = hinted
+        page_infos.append({
+            'page': entry['page'],
+            'geo': geo,
+            'key': key,
+            'empty': not notes or not geo.measures,
+        })
+
+    sections = []
+    current = None
+    pending = None  # a disagreeing page waiting for confirmation
+    for info in page_infos:
+        if info['empty']:
+            if pending is not None and current is not None:
+                current['pages'].append(pending)
+                pending = None
+            if current is not None:
+                notes = [n for p in current['pages'] for n in p['geo'].noteheads]
+                current['key'] = _key_for_notes(notes, None) if notes else current['key']
+                sections.append(current)
+                current = None
+            continue
+
+        if current is None:
+            current = {'pages': [info], 'key': info['key']}
+            continue
+
+        if _keys_compatible(current['key'], info['key']):
+            if pending is not None:
+                current['pages'].append(pending)
+                pending = None
+            current['pages'].append(info)
+            notes = [n for p in current['pages'] for n in p['geo'].noteheads]
+            current['key'] = _key_for_notes(notes, None)
+            continue
+
+        # First disagreeing page: hold it. A second one confirms a new section.
+        if pending is None:
+            pending = info
+            continue
+
+        if _keys_compatible(pending['key'], info['key']):
+            notes = [n for p in current['pages'] for n in p['geo'].noteheads]
+            current['key'] = _key_for_notes(notes, None) if notes else current['key']
+            sections.append(current)
+            current = {'pages': [pending, info], 'key': info['key']}
+            notes = [n for p in current['pages'] for n in p['geo'].noteheads]
+            current['key'] = _key_for_notes(notes, None)
+            pending = None
+        else:
+            # Pending was a blip; absorb it and reconsider the new page.
+            current['pages'].append(pending)
+            notes = [n for p in current['pages'] for n in p['geo'].noteheads]
+            current['key'] = _key_for_notes(notes, None)
+            pending = info
+
+    if pending is not None and current is not None:
+        current['pages'].append(pending)
+    if current is not None:
+        notes = [n for p in current['pages'] for n in p['geo'].noteheads]
+        current['key'] = _key_for_notes(notes, None) if notes else current['key']
+        sections.append(current)
+    return sections
+
+
 def analyze(pages: list) -> dict:
     """
     Run the harmony engine across pages of geometry.
 
     `pages` is a list of dicts: {'geometry': PageGeometry, 'page': int}.
     """
-    all_measures = []
-    for entry in pages:
-        geo = entry['geometry']
-        for measure in sorted(geo.measures, key=lambda m: m.index):
-            all_measures.append((entry['page'], geo, measure))
+    sections = segment_keys(pages)
+    if not sections:
+        empty_key = Key(0, 'major', 0.0)
+        return {
+            'key': empty_key,
+            'keys': [empty_key],
+            'spans': [],
+            'cadences': [],
+            'profile': [0.0] * 12,
+            'time_signature': None,
+            'beats_per_measure': 4.0,
+        }
 
+    keys = []
+    merged = []
     global_profile = [0.0] * 12
-    for _, geo, measure in all_measures:
-        for pc, weight in enumerate(profile_from_notes(measure.noteheads)):
-            global_profile[pc] += weight
+    meter_votes = {}
 
-    key_sharps = None
-    if pages:
-        first = pages[0]['geometry']
-        if first.systems and first.systems[0].staves:
-            key_sharps = first.systems[0].staves[0].key_sharps
-    key = detect_key(global_profile, key_sharps)
+    for section in sections:
+        key = section['key'] or Key(0, 'major', 0.0)
+        key_index = len(keys)
+        keys.append(key)
 
-    # A meter change applies from its measure onwards, so walk the piece in
-    # order and carry the current meter forward.
-    meter_at = {}
-    current = None
-    for position, (page, geo, measure) in enumerate(all_measures):
-        for start, meter in getattr(geo, 'meter_changes', []):
-            if start == measure.index:
-                current = meter
-        meter_at[position] = current
+        all_measures = []
+        for info in section['pages']:
+            geo = info['geo']
+            for measure in sorted(geo.measures, key=lambda m: m.index):
+                all_measures.append((info['page'], geo, measure))
+                for pc, weight in enumerate(profile_from_notes(measure.noteheads)):
+                    global_profile[pc] += weight
 
-    entries = []
-    for position, (page, geo, measure) in enumerate(all_measures):
-        options, beats = meter_divisions(meter_at[position])
-        for span, candidates in choose_harmonic_rhythm(measure, geo.space, key,
-                                                       options, beats):
-            span.key_index = 0
-            entries.append((page, span, candidates))
+        meter_at = {}
+        current_meter = None
+        for position, (page, geo, measure) in enumerate(all_measures):
+            for start, meter in getattr(geo, 'meter_changes', []):
+                if start == measure.index:
+                    current_meter = meter
+            meter_at[position] = current_meter
+            if current_meter:
+                meter_votes[current_meter] = meter_votes.get(current_meter, 0) + 1
 
-    # The piece's meter is the one that governs the most bars, not the first
-    # one printed: a waltz that opens with a 2/4 pickup is still a waltz.
-    tally = {}
-    for meter in meter_at.values():
-        if meter:
-            tally[meter] = tally.get(meter, 0) + 1
-    time_signature = max(tally.items(), key=lambda kv: kv[1])[0] if tally else None
+        entries = []
+        for position, (page, geo, measure) in enumerate(all_measures):
+            options, beats = meter_divisions(meter_at[position])
+            for span, candidates in choose_harmonic_rhythm(
+                    measure, geo.space, key, options, beats):
+                span.key_index = key_index
+                span.prefers_sharps = key.prefers_sharps
+                entries.append((page, span, candidates))
+
+        path = smooth_sequence([c for _, _, c in entries], key)
+        for (page, span, candidates), chosen in zip(entries, path):
+            finalize_span(span, candidates, chosen)
+
+        for page, span, _ in entries:
+            if (merged and merged[-1][1].measure_index == span.measure_index
+                    and merged[-1][0] == page
+                    and merged[-1][1].root == span.root
+                    and merged[-1][1].quality == span.quality):
+                prev = merged[-1][1]
+                prev.x2 = max(prev.x2, span.x2)
+                prev.beats += span.beats
+                prev.confidence = max(prev.confidence, span.confidence)
+                prev.note_ids.extend(span.note_ids)
+                continue
+            merged.append((page, span))
+
+    time_signature = (
+        max(meter_votes.items(), key=lambda kv: kv[1])[0] if meter_votes else None
+    )
     _, beats_per_measure = meter_divisions(time_signature)
 
-    path = smooth_sequence([c for _, _, c in entries], key)
-    for (page, span, candidates), chosen in zip(entries, path):
-        finalize_span(span, candidates, chosen)
-
-    merged = []
-    for page, span, _ in entries:
-        if (merged and merged[-1][1].measure_index == span.measure_index
-                and merged[-1][1].root == span.root and merged[-1][1].quality == span.quality):
-            prev = merged[-1][1]
-            prev.x2 = max(prev.x2, span.x2)
-            prev.beats += span.beats
-            prev.confidence = max(prev.confidence, span.confidence)
-            prev.note_ids.extend(span.note_ids)
-            continue
-        merged.append((page, span))
-
-    keys = [key]
     for _, span in merged:
+        key = keys[span.key_index]
         span.roman = roman_numeral(span.root, span.quality, key)
         span.function = harmonic_function(span.root, span.quality, key)
         target = secondary_dominant_target(span.root, span.quality, key)
         if target and target != 'I':
-            span.roman = f"V/{target}"
+            span.roman = f'V/{target}'
             span.function = 'secondary-dominant'
             span.tonicizes = target
 
-    cadences = find_cadences([s for _, s in merged], keys, beats_per_measure)
+    # Cadences are labelled inside each key section so a key change itself is
+    # not mistaken for a deceptive cadence.
+    cadences = []
+    by_key = {}
+    for index, (page, span) in enumerate(merged):
+        by_key.setdefault(span.key_index, []).append((index, span))
+    for key_index, items in by_key.items():
+        local_spans = [span for _, span in items]
+        local = find_cadences(local_spans, keys, beats_per_measure)
+        for cadence in local:
+            # find_cadences indexes into the local list; map back.
+            global_index = items[cadence['index']][0]
+            cadences.append({
+                'index': global_index,
+                'label': cadence['label'],
+                'progression': cadence['progression'],
+                'measure': cadence['measure'],
+            })
+    cadences.sort(key=lambda c: c['index'])
+
+    # The headline key is the section with the most music, not the first page.
+    headline = max(
+        range(len(keys)),
+        key=lambda i: sum(1 for _, span in merged if span.key_index == i),
+        default=0,
+    )
     return {
-        'key': key,
+        'key': keys[headline],
         'keys': keys,
         'spans': merged,
         'cadences': cadences,

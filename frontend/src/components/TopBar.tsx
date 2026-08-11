@@ -20,8 +20,10 @@ export function TopBar({
   onToggleMeasures,
   onReset,
 }: Props) {
-  const { key, meter, stats, progress, status, source } = analysis;
+  const { key, keys, meter, stats, progress, status, source } = analysis;
   const busy = status === 'running' || status === 'queued';
+  const localKeys = keys?.length ? keys : key ? [key] : [];
+  const multiKey = localKeys.length > 1;
   const readAs =
     source === 'engraved'
       ? 'Read from the engraving itself, so every pitch is exact.'
@@ -39,9 +41,16 @@ export function TopBar({
           <h1>{filename}</h1>
           <div className="meta-row">
             {key && (
-              <span className="key-pill">
-                {key.name}
-                {key.sharps != null && key.sharps !== 0 && (
+              <span
+                className="key-pill"
+                title={
+                  multiKey
+                    ? `Local keys: ${localKeys.map((item) => item.name).join(' · ')}`
+                    : undefined
+                }
+              >
+                {multiKey ? `${localKeys.length} keys` : key.name}
+                {!multiKey && key.sharps != null && key.sharps !== 0 && (
                   <em>
                     {Math.abs(key.sharps)}
                     {key.sharps > 0 ? '♯' : '♭'}

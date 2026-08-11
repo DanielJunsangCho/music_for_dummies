@@ -136,6 +136,7 @@ export default function App() {
         pages={pages}
         cadences={analysis.cadences ?? []}
         keyInfo={analysis.key}
+        keyCount={analysis.keys?.length ?? (analysis.key ? 1 : 0)}
         hovered={hovered}
         selected={selected}
         onHover={setHovered}

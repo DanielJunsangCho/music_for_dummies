@@ -13,4 +13,7 @@ MUSIC_TEST_CORPUS_DIR=/Users/juncho/Downloads/compressed \
 
 Without `MUSIC_TEST_CORPUS_DIR`, normal unit-test discovery skips the corpus cleanly.
 
-Thresholds describe the visible score, not the current detector output. A fixture remains failing until the vision engine recovers the expected minimum number of systems, measures, and notes.
+Thresholds are regression floors for the phone-photo CV path (wrinkled Jobim/
+Bonfá plates). They are below a perfect reading of the page — especially
+`IMG_4264`, which is still short on systems/notes — but they fail hard if
+detection collapses back to zero notes.
